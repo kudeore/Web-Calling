@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "5000:5000"
+    environment:
+      - CLIENT_URL=http://localhost:3000
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        REACT_APP_SIGNALING_SERVER: http://localhost:5000
+    ports:
+      - "3005:80" # Map host port 3000 to container's Nginx port 80
+    depends_on:
+      - backend
+
+  redis:
+    image: "redis:alpine"
+    ports:
+      - "6379:6379"

@@ -1,175 +1,158 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState, useCallback } from "react";
+import { io } from "socket.io-client";
+
+// --- Configuration ---
+const ICE_SERVERS = [
+  { urls: "stun:stun.l.google.com:19302" },
+];
 
 function App() {
-  const videoRef = useRef(null);
-  const [stream, setStream] = useState(null);
-  const [audioOn, setAudioOn] = useState(true);
-  const [videoOn, setVideoOn] = useState(true);
-  const [screenSharing, setScreenSharing] = useState(false);
+  // --- Refs ---
+  const localVideoRef = useRef(null);
+  const remoteVideoRef = useRef(null);
+  const pcRef = useRef(null);
+  const socketRef = useRef(null);
 
-  // Start local media (camera/mic)
-  const startCall = async () => {
-    if (stream) return;
-    const userStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
-    setStream(userStream);
-    videoRef.current.srcObject = userStream;
-    setAudioOn(true);
-    setVideoOn(true);
-  };
+  // --- State ---
+  const [roomName, setRoomName] = useState("");
+  const [isJoined, setIsJoined] = useState(false);
+  const [localStream, setLocalStream] = useState(null);
+  const [connectionState, setConnectionState] = useState("DISCONNECTED");
 
-  // Toggle audio (mute/unmute)
-  const toggleAudio = () => {
-    if (stream) {
-      stream.getAudioTracks().forEach(track => (track.enabled = !track.enabled));
-      setAudioOn(!audioOn);
+  // This effect now correctly depends on both the stream and the joined state
+  useEffect(() => {
+    if (localStream && isJoined && localVideoRef.current) {
+      localVideoRef.current.srcObject = localStream;
     }
-  };
+  }, [localStream, isJoined]);
 
-  // Toggle video (on/off)
-  const toggleVideo = () => {
-    if (stream) {
-      stream.getVideoTracks().forEach(track => (track.enabled = !track.enabled));
-      setVideoOn(!videoOn);
-    }
-  };
 
-  // Screen share
-  const startScreenShare = async () => {
-    if (!stream || screenSharing) return;
+  // --- Core WebRTC & Signaling Logic ---
+  const handleSignal = useCallback(async ({ from, type, sdp, candidate }) => {
+    if (!pcRef.current) return;
     try {
-      const displayStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-      const videoTrack = displayStream.getVideoTracks()[0];
+      if (type === "offer") {
+        await pcRef.current.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
+        const answer = await pcRef.current.createAnswer();
+        await pcRef.current.setLocalDescription(answer);
+        socketRef.current.emit("signal", { room: roomName, type: "answer", sdp: answer.sdp });
+      } else if (type === "answer") {
+        await pcRef.current.setRemoteDescription(new RTCSessionDescription({ type, sdp }));
+      } else if (type === "candidate") {
+        await pcRef.current.addIceCandidate(new RTCIceCandidate(candidate));
+      }
+    } catch (error) {
+      console.error("Error handling signal:", error);
+    }
+  }, [roomName]);
 
-      // Replace video track in local stream
-      stream.removeTrack(stream.getVideoTracks()[0]);
-      stream.addTrack(videoTrack);
+  const createPeerConnection = useCallback((stream) => {
+    const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
 
-      videoRef.current.srcObject = null;
-      videoRef.current.srcObject = stream;
+    pc.onicecandidate = (event) => {
+      if (event.candidate) {
+        socketRef.current.emit("signal", { room: roomName, type: "candidate", candidate: event.candidate });
+      }
+    };
 
-      setScreenSharing(true);
+    pc.ontrack = (event) => {
+      if (remoteVideoRef.current) {
+        remoteVideoRef.current.srcObject = event.streams[0];
+      }
+    };
 
-      videoTrack.onended = () => {
-        // Revert to camera after sharing ends
-        stream.removeTrack(videoTrack);
-        navigator.mediaDevices.getUserMedia({ video: true }).then(camStream => {
-          let camTrack = camStream.getVideoTracks()[0];
-          stream.addTrack(camTrack);
-          videoRef.current.srcObject = stream;
+    pc.onconnectionstatechange = () => {
+        setConnectionState(pc.connectionState.toUpperCase());
+    };
+
+    stream.getTracks().forEach(track => pc.addTrack(track, stream));
+
+    return pc;
+  }, [roomName]);
+
+  const createOffer = async () => {
+    if (!pcRef.current) return;
+    try {
+      const offer = await pcRef.current.createOffer();
+      await pcRef.current.setLocalDescription(offer);
+      socketRef.current.emit("signal", { room: roomName, type: "offer", sdp: offer.sdp });
+    } catch (error) {
+      console.error("Error creating offer:", error);
+    }
+  };
+
+  const handleJoinRoom = async () => {
+    if (!roomName) return alert("Please enter a room name.");
+    
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      setLocalStream(stream);
+
+      socketRef.current = io(); 
+      
+      socketRef.current.on('connect', () => {
+        socketRef.current.emit("join-room", roomName, socketRef.current.id);
+        setIsJoined(true); // This will trigger the useEffect
+        pcRef.current = createPeerConnection(stream);
+        socketRef.current.on("user-joined", () => createOffer());
+        socketRef.current.on("signal", handleSignal);
+        socketRef.current.on("user-left", (userId) => {
+            if (remoteVideoRef.current) remoteVideoRef.current.srcObject = null;
+            pcRef.current.close();
+            pcRef.current = createPeerConnection(stream);
         });
-        setScreenSharing(false);
-      };
-    } catch (e) {
-      alert("Screen sharing failed");
+      });
+
+    } catch (error) {
+      console.error("Could not start call:", error);
+      alert(`Error starting call: ${error.message}`);
     }
   };
 
-  // End call
-  const endCall = () => {
-    if (stream) {
-      stream.getTracks().forEach(track => track.stop());
-      setStream(null);
-      setAudioOn(false);
-      setVideoOn(false);
-      setScreenSharing(false);
-      if (videoRef.current) videoRef.current.srcObject = null;
-    }
+  const handleHangUp = () => {
+    if (socketRef.current) socketRef.current.disconnect();
+    if (pcRef.current) pcRef.current.close();
+    if (localStream) localStream.getTracks().forEach(track => track.stop());
+    setLocalStream(null);
+    setIsJoined(false);
+    setRoomName("");
+    setConnectionState("DISCONNECTED");
   };
+
+  useEffect(() => {
+    return () => handleHangUp();
+  }, []);
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginTop: 40 }}>
-      <video
-      ref={videoRef}
-      autoPlay
-      playsInline
-      muted
-      style={{ width: 800, height: 600, background: "#222", borderRadius: 10, marginBottom: 24 }}
-      />
-
-    <div style={{ display: "flex", gap: 24 }}>
-        {/* Start Call */}
-        <button
-          title="Start Call"
-          onClick={startCall}
-          disabled={!!stream}
-          style={{
-            fontSize: "3rem",
-            color: "green",       // <-- Call icon is now green
-            background: "none",
-            border: "none",
-            cursor: "pointer"
-          }}
-        >
-          📞
-        </button>
-        {/* Mute/Unmute */}
-        <button
-          title="Mute/Unmute"
-          onClick={toggleAudio}
-          disabled={!stream}
-          style={{
-            fontSize: "3rem",
-            background: "none",
-            border: "none",
-            cursor: "pointer"
-          }}
-        >
-          {audioOn ? "🔊" : "🔇"}
-        </button>
-        {/* Video On/Off */}
-        <button
-          title="Video On/Off"
-          onClick={toggleVideo}
-          disabled={!stream}
-          style={{
-            fontSize: "3rem",
-            background: "none",
-            border: "none",
-            cursor: "pointer"
-          }}
-        >
-          {videoOn ? "🎥" : "🎦"}
-        </button>
-        {/* Screen Share */}
-        <button
-          title="Screen Share"
-          onClick={startScreenShare}
-          disabled={!stream || screenSharing}
-          style={{
-            fontSize: "3rem",
-            background: "none",
-            border: "none",
-            cursor: "pointer"
-          }}
-        >
-          🖥️
-        </button>
-        {/* End Call */}
-        <button
-          title="End Call"
-          onClick={endCall}
-          disabled={!stream}
-          style={{
-            fontSize: "3rem",
-            color: "red",         // <-- End call icon stays red
-            background: "none",
-            border: "none",
-            cursor: "pointer"
-          }}
-        >
-          📴
-        </button>
-      </div>
-      <div style={{ marginTop: 24, color: "#4e4e4e" }}>
-        <b>Status:</b><br />
-        {stream ? (
-          <>
-            {audioOn ? "Microphone: ON" : "Microphone: OFF"}<br />
-            {videoOn ? "Camera: ON" : "Camera: OFF"}<br />
-            {screenSharing ? "Screen Sharing Active" : ""}
-          </>
-        ) : "Call not started"}
-      </div>
+    <div>
+      <h1>Simple WebRTC Video Call</h1>
+      {!isJoined ? (
+        <div>
+          <input
+            type="text"
+            value={roomName}
+            onChange={(e) => setRoomName(e.target.value)}
+            placeholder="Enter Room Name"
+          />
+          <button onClick={handleJoinRoom}>Join Room</button>
+        </div>
+      ) : (
+        <div>
+          <h2>Room: {roomName}</h2>
+          <p><strong>Status:</strong> {connectionState}</p>
+          <button onClick={handleHangUp}>Hang Up</button>
+          <div>
+            <div>
+              <h3>Local Video</h3>
+              <video ref={localVideoRef} autoPlay playsInline muted style={{ width: 320 }} />
+            </div>
+            <div>
+              <h3>Remote Video</h3>
+              <video ref={remoteVideoRef} autoPlay playsInline style={{ width: 320, backgroundColor: '#333' }} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
