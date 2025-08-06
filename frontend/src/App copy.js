@@ -4,7 +4,7 @@ import Peer from 'simple-peer';
 import styled from 'styled-components';
 
 // =============================================================================
-// Styled Components - Final Version
+// Styled Components - With the definitive layout fix
 // =============================================================================
 
 const AppContainer = styled.div`
@@ -27,7 +27,7 @@ const MainContainer = styled.div`
   box-shadow: 0 0 40px rgba(0, 191, 255, 0.3), 0 0 10px rgba(0, 191, 255, 0.2) inset;
   width: 90vw;
   max-width: 1400px;
-  height: 90vh; /* Use height instead of min-height to contain the grid */
+  height: 90vh; /* This correctly constrains the overall container height */
 `;
 
 const Header = styled.h1`
@@ -35,7 +35,7 @@ const Header = styled.h1`
   font-weight: 700;
   color: #E2E8F0;
   text-align: center;
-  flex-shrink: 0; /* Prevents header from shrinking */
+  flex-shrink: 0;
 `;
 
 const StatusText = styled.p`
@@ -43,16 +43,20 @@ const StatusText = styled.p`
   color: #718096;
   margin-top: -15px;
   margin-bottom: 20px;
-  flex-shrink: 0; /* Prevents status from shrinking */
+  flex-shrink: 0;
 `;
 
 const VideoGrid = styled.div`
-  flex-grow: 1; /* Allows the grid to fill the available space */
+  flex-grow: 1;
   width: 100%;
   display: grid;
   gap: 20px;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  overflow-y: auto; /* Add scrollbar if there are too many videos */
+  overflow-y: auto;
+
+  /* --- THIS IS THE CRITICAL FIX --- */
+  /* This rule tells the grid to pack items at the start instead of stretching them vertically. */
+  align-content: start;
 `;
 
 const VideoContainer = styled.div`
@@ -61,7 +65,9 @@ const VideoContainer = styled.div`
   position: relative;
   overflow: hidden;
   border: 2px solid rgba(0, 191, 255, 0.2);
-  /* cursor: pointer; has been removed */
+  
+  /* This new rule ensures videos keep a nice 16:9 shape */
+  aspect-ratio: 16 / 9;
 `;
 
 const StyledVideo = styled.video`
@@ -75,7 +81,7 @@ const Controls = styled.div`
   display: flex;
   gap: 20px;
   margin-top: 20px;
-  flex-shrink: 0; /* Prevents controls from shrinking */
+  flex-shrink: 0;
 `;
 
 const ControlButton = styled.button`
@@ -160,6 +166,7 @@ const Video = ({ peer }) => {
 
 
 const App = () => {
+    // State variables
     const [roomID, setRoomID] = useState("");
     const [stream, setStream] = useState(null);
     const [peers, setPeers] = useState([]);
@@ -167,6 +174,7 @@ const App = () => {
     const [videoOn, setVideoOn] = useState(true);
     const [isScreenSharing, setIsScreenSharing] = useState(false);
 
+    // Ref variables
     const socketRef = useRef();
     const myVideo = useRef();
     const peersRef = useRef([]);
@@ -313,12 +321,10 @@ const App = () => {
                 <StatusText>In Room: {roomID}</StatusText>
                 
                 <VideoGrid>
-                    {/* The onClick handler has been removed from this container */}
                     <VideoContainer>
                         <StyledVideo muted ref={myVideo} autoPlay playsInline />
                     </VideoContainer>
                     {peers.map((data) => (
-                        // The onClick handler has been removed from this container
                         <VideoContainer key={data.peerID}>
                             <Video peer={data.peer} />
                         </VideoContainer>
