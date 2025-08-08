@@ -7,14 +7,14 @@ const server = http.createServer(app);
 
 const io = new Server(server, {
   cors: {
-    origin: '*', // Allows connections from any origin
+    origin: '*', // Allows connections from any origin for simplicity
     methods: ['GET', 'POST'],
   },
 });
 
 // Healthcheck route for Google Cloud Run
 app.get('/', (req, res) => {
-  res.status(200).send({ status: 'ok' });
+  res.status(200).send({ status: 'ok', message: 'Signaling server is running.' });
 });
 
 // A simple JavaScript object to store room data in memory.
@@ -28,17 +28,23 @@ io.on('connection', (socket) => {
     rooms[roomId] = [...otherUsers, socket.id];
     socket.join(roomId);
 
+    // Send the list of existing users to the new user so they can initiate connections
     socket.emit('all-users', otherUsers);
     console.log(`User ${socket.id} joined room ${roomId}.`);
   });
 
+  // This is for the initial signal from an existing user to a new user
   socket.on('sending signal', (payload) => {
-    io.to(payload.userToSignal).emit('user joined', {
+    // ### THIS IS THE CRITICAL FIX ###
+    // The event emitted to the new user is now 'user-to-connect'.
+    // This avoids confusion with the old 'user joined' event.
+    io.to(payload.userToSignal).emit('user-to-connect', {
       signal: payload.signal,
       callerID: payload.callerID,
     });
   });
 
+  // This is for the return signal from the new user back to the original caller
   socket.on('returning signal', (payload) => {
     io.to(payload.callerID).emit('receiving returned signal', {
       signal: payload.signal,

@@ -1,0 +1,22 @@
+server {
+    # This will be replaced by the value of the $PORT environment variable
+    listen ${PORT};
+    server_name localhost;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html;
+        try_files $uri $uri/ /index.html;
+    }
+
+    location /socket.io/ {
+        # This proxy_pass is still correct from your last step
+        proxy_pass https://mentorflow-backend-448143469831.us-central1.run.app;
+
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "Upgrade";
+        proxy_set_header Host $host;
+        proxy_cache_bypass $http_upgrade;
+    }
+}
