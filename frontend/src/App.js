@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useParams } from 'react-router-dom'; // Import the hook to read URL parameters
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import styled from 'styled-components';
@@ -109,22 +110,12 @@ const ControlButton = styled.button`
   }
 `;
 
-const RoomInputContainer = styled.div`
-  display: flex;
-  flex-direction: column;
-  gap: 20px;
-  align-items: center;
-`;
-
-const RoomInput = styled.input`
-  padding: 12px 18px;
-  border-radius: 8px;
-  border: 1px solid #4A5568;
-  background-color: #101418;
-  color: #E2E8F0;
-  font-size: 1rem;
-  width: 300px;
-  text-align: center;
+const PreJoinContainer = styled.div`
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    align-items: center;
+    text-align: center;
 `;
 
 const JoinButton = styled.button`
@@ -159,11 +150,11 @@ const Video = ({ peer }) => {
     return <StyledVideo playsInline autoPlay ref={ref} mirrored={false} />;
 };
 
-
 const App = () => {
-    const isScreenShareSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
+    // This is the new way to get the room ID from the URL
+    const { roomID } = useParams();
 
-    const [roomID, setRoomID] = useState("");
+    const isScreenShareSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
     const [stream, setStream] = useState(null);
     const [peers, setPeers] = useState([]);
     const [audioOn, setAudioOn] = useState(true);
@@ -199,10 +190,6 @@ const App = () => {
     }
     
     const handleJoin = () => {
-        if (!roomID) {
-            alert("Please enter a room name.");
-            return;
-        }
         socketRef.current = io.connect("/");
         navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
             setStream(stream);
@@ -291,24 +278,25 @@ const App = () => {
         setPeers([]);
         peersRef.current = [];
         setStream(null);
-        setRoomID("");
-        setIsScreenSharing(false);
     };
     
+    // The "Pre-Join" or Lobby Screen
     if (!stream) {
         return (
             <AppContainer>
                 <MainContainer>
                     <Header>MentorFlow</Header>
-                    <RoomInputContainer>
-                        <RoomInput value={roomID} onChange={e => setRoomID(e.target.value)} placeholder="Enter Room Name"/>
-                        <JoinButton onClick={handleJoin}>Join Call</JoinButton>
-                    </RoomInputContainer>
+                    <PreJoinContainer>
+                        <StatusText>You are about to join the call:</StatusText>
+                        <p style={{fontSize: '1.2rem', color: '#00BFFF', margin: '10px'}}>{roomID}</p>
+                        <JoinButton onClick={handleJoin}>Join with Camera and Mic</JoinButton>
+                    </PreJoinContainer>
                 </MainContainer>
             </AppContainer>
         );
     }
 
+    // The main Call UI
     return (
         <AppContainer>
             <MainContainer>

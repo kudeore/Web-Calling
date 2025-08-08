@@ -1,27 +1,31 @@
-version: '3.8'
-
 services:
   backend:
     build: ./backend
-    ports:
-      - "5000:5000"
     environment:
-      - CLIENT_URL=http://localhost:3000
       - REDIS_HOST=redis
     depends_on:
       - redis
+    # --- ADD THIS LINE ---
+    # Explicitly use the default bridge network for maximum compatibility.
+    network_mode: bridge
 
   frontend:
     build:
       context: ./frontend
-      args:
-        REACT_APP_SIGNALING_SERVER: http://localhost:5000
     ports:
-      - "3005:80" # Map host port 3000 to container's Nginx port 80
+      - "3005:80"
     depends_on:
       - backend
+    # Keep the restart policy, as it's still good practice.
+    restart: unless-stopped
+    # --- ADD THIS LINE ---
+    # Ensure the frontend is on the same network.
+    network_mode: bridge
 
   redis:
     image: "redis:alpine"
     ports:
       - "6379:6379"
+    # --- ADD THIS LINE ---
+    # Ensure redis is on the same network.
+    network_mode: bridge
