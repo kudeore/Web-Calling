@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { Routes, Route, useParams, useNavigate } from 'react-router-dom';
 import io from 'socket.io-client';
 import Peer from 'simple-peer';
 import styled from 'styled-components';
 
 // =============================================================================
-// Styled Components
+// Styled Components (Copied from your original file, no changes needed)
 // =============================================================================
 
 const AppContainer = styled.div`
@@ -144,9 +145,8 @@ const JoinButton = styled.button`
 `;
 
 // =============================================================================
-// React Components
+// Reusable Video Component (No Changes)
 // =============================================================================
-
 const Video = ({ peer }) => {
     const ref = useRef();
     useEffect(() => {
@@ -159,11 +159,14 @@ const Video = ({ peer }) => {
     return <StyledVideo playsInline autoPlay ref={ref} mirrored={false} />;
 };
 
+// =============================================================================
+// NEW: Component for the Video Call Page
+// This handles all the logic for an active call.
+// =============================================================================
+const CallPage = () => {
+    const { roomID } = useParams(); // Get roomID from the URL
+    const navigate = useNavigate();
 
-const App = () => {
-    const isScreenShareSupported = !!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia);
-
-    const [roomID, setRoomID] = useState("");
     const [stream, setStream] = useState(null);
     const [peers, setPeers] = useState([]);
     const [audioOn, setAudioOn] = useState(true);
@@ -176,16 +179,62 @@ const App = () => {
     const screenTrackRef = useRef();
 
     useEffect(() => {
+        socketRef.current = io.connect("/");
+        navigator.mediaDevices.getUserMedia({ video: true, audio: true })
+            .then(stream => {
+                setStream(stream);
+                socketRef.current.emit("join-room", roomID);
+                setupSocketListeners(stream);
+            })
+            .catch(err => {
+                console.error("Error getting user media:", err);
+                alert("Could not access camera and microphone. Please check permissions and try again.");
+                navigate("/"); // Redirect to home if media access fails
+            });
+
+        return () => {
+            if (socketRef.current) socketRef.current.disconnect();
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            if (screenTrackRef.current) screenTrackRef.current.stop();
+        };
+    }, [roomID, navigate]);
+
+    useEffect(() => {
         if (stream && myVideo.current) {
             myVideo.current.srcObject = stream;
-            // *** THIS IS THE FIX ***
-            // Forcefully enable the video track when the stream is first attached.
-            // This prevents issues where the track might be disabled from a previous state.
             if (stream.getVideoTracks().length > 0) {
-              stream.getVideoTracks()[0].enabled = true;
+                stream.getVideoTracks()[0].enabled = true;
             }
         }
     }, [stream]);
+
+    const setupSocketListeners = (stream) => {
+        socketRef.current.on("all-users", users => {
+            const peers = [];
+            users.forEach(userID => {
+                const peer = createPeer(userID, socketRef.current.id, stream);
+                peersRef.current.push({ peerID: userID, peer });
+                peers.push({ peerID: userID, peer });
+            });
+            setPeers(peers);
+        });
+        socketRef.current.on("user joined", payload => {
+            const peer = addPeer(payload.signal, payload.callerID, stream);
+            peersRef.current.push({ peerID: payload.callerID, peer });
+            setPeers(userPeers => [...userPeers, { peer, peerID: payload.callerID }]);
+        });
+        socketRef.current.on("receiving returned signal", payload => {
+            const item = peersRef.current.find(p => p.peerID === payload.id);
+            if (item) item.peer.signal(payload.signal);
+        });
+        socketRef.current.on("user-left", id => {
+            const peerObj = peersRef.current.find(p => p.peerID === id);
+            if (peerObj) peerObj.peer.destroy();
+            const newPeers = peersRef.current.filter(p => p.peerID !== id);
+            peersRef.current = newPeers;
+            setPeers(newPeers);
+        });
+    };
 
     function createPeer(userToSignal, callerID, stream) {
         const peer = new Peer({ initiator: true, trickle: false, stream });
@@ -204,43 +253,6 @@ const App = () => {
         return peer;
     }
 
-    const handleJoin = () => {
-        if (!roomID) {
-            alert("Please enter a room name.");
-            return;
-        }
-        socketRef.current = io.connect("/");
-        navigator.mediaDevices.getUserMedia({ video: true, audio: true }).then(stream => {
-            setStream(stream);
-            socketRef.current.emit("join-room", roomID);
-            socketRef.current.on("all-users", users => {
-                const peers = [];
-                users.forEach(userID => {
-                    const peer = createPeer(userID, socketRef.current.id, stream);
-                    peersRef.current.push({ peerID: userID, peer });
-                    peers.push({ peerID: userID, peer });
-                });
-                setPeers(peers);
-            });
-            socketRef.current.on("user joined", payload => {
-                const peer = addPeer(payload.signal, payload.callerID, stream);
-                peersRef.current.push({ peerID: payload.callerID, peer });
-                setPeers(userPeers => [...userPeers, { peer, peerID: payload.callerID }]);
-            });
-            socketRef.current.on("receiving returned signal", payload => {
-                const item = peersRef.current.find(p => p.peerID === payload.id);
-                item.peer.signal(payload.signal);
-            });
-            socketRef.current.on("user-left", id => {
-                const peerObj = peersRef.current.find(p => p.peerID === id);
-                if(peerObj) peerObj.peer.destroy();
-                const newPeers = peersRef.current.filter(p => p.peerID !== id);
-                peersRef.current = newPeers;
-                setPeers(newPeers);
-            });
-        });
-    };
-
     const toggleAudio = () => {
         if (stream) {
             stream.getAudioTracks()[0].enabled = !audioOn;
@@ -257,22 +269,18 @@ const App = () => {
 
     const handleScreenShare = () => {
         if (!stream) return;
-
         if (isScreenSharing) {
-            // Stop screen sharing
             const cameraTrack = stream.getVideoTracks()[0];
             replaceTrack(cameraTrack);
             myVideo.current.srcObject = stream;
             setIsScreenSharing(false);
             if (screenTrackRef.current) screenTrackRef.current.stop();
         } else {
-            // Start screen sharing
             navigator.mediaDevices.getDisplayMedia({ cursor: true }).then(screenStream => {
                 screenTrackRef.current = screenStream.getTracks()[0];
                 replaceTrack(screenTrackRef.current);
                 myVideo.current.srcObject = screenStream;
                 setIsScreenSharing(true);
-                // Listen for when the user stops sharing via the browser's UI
                 screenTrackRef.current.onended = () => {
                     const cameraTrack = stream.getVideoTracks()[0];
                     replaceTrack(cameraTrack);
@@ -288,75 +296,86 @@ const App = () => {
 
     const replaceTrack = (newTrack) => {
         peersRef.current.forEach(item => {
-            // Find the video sender
             const sender = item.peer._pc.getSenders().find(s => s.track && s.track.kind === 'video');
-            if (sender) {
-                sender.replaceTrack(newTrack);
-            }
+            if (sender) sender.replaceTrack(newTrack);
         });
     };
 
     const handleEndCall = () => {
-        if (stream) stream.getTracks().forEach(track => track.stop());
-        if (screenTrackRef.current) screenTrackRef.current.stop();
-        if (socketRef.current) socketRef.current.disconnect();
-        setPeers([]);
-        peersRef.current = [];
-        setStream(null);
-        setRoomID("");
-        setIsScreenSharing(false);
+        navigate("/"); // Redirect to the homepage on end call
     };
 
     if (!stream) {
-        return (
-            <AppContainer>
-                <MainContainer>
-                    <Header>MentorFlow</Header>
-                    <RoomInputContainer>
-                        <RoomInput value={roomID} onChange={e => setRoomID(e.target.value)} placeholder="Enter Room Name"/>
-                        <JoinButton onClick={handleJoin}>Join Call</JoinButton>
-                    </RoomInputContainer>
-                </MainContainer>
-            </AppContainer>
-        );
+        return <MainContainer><Header>Connecting to Call...</Header></MainContainer>;
     }
 
     return (
-        <AppContainer>
-            <MainContainer>
-                <Header>MentorFlow</Header>
-                <StatusText>In Room: {roomID}</StatusText>
-
-                <VideoGrid>
-                    <VideoContainer>
-                        <StyledVideo muted ref={myVideo} autoPlay playsInline mirrored={!isScreenSharing} />
+        <MainContainer>
+            <Header>MentorFlow</Header>
+            <StatusText>In Room: {roomID}</StatusText>
+            <VideoGrid>
+                <VideoContainer>
+                    <StyledVideo muted ref={myVideo} autoPlay playsInline mirrored={!isScreenSharing} />
+                </VideoContainer>
+                {peers.map((data) => (
+                    <VideoContainer key={data.peerID}>
+                        <Video peer={data.peer} />
                     </VideoContainer>
-                    {peers.map((data) => (
-                        <VideoContainer key={data.peerID}>
-                            <Video peer={data.peer} />
-                        </VideoContainer>
-                    ))}
-                </VideoGrid>
-
-                <Controls>
-                    <ControlButton active={audioOn} onClick={toggleAudio}>
-                        {audioOn ? "🎤" : "🔇"}
-                    </ControlButton>
-                    <ControlButton active={videoOn} onClick={toggleVideo} disabled={isScreenSharing}>
-                        {videoOn ? "📹" : "📸"}
-                    </ControlButton>
-                    {isScreenShareSupported && (
-                        <ControlButton active={isScreenSharing} onClick={handleScreenShare}>
-                            🖥️
-                        </ControlButton>
-                    )}
-                    <ControlButton className="end" onClick={handleEndCall}>
-                        📞
-                    </ControlButton>
-                </Controls>
-            </MainContainer>
-        </AppContainer>
+                ))}
+            </VideoGrid>
+            <Controls>
+                <ControlButton active={audioOn} onClick={toggleAudio}>{audioOn ? "🎤" : "🔇"}</ControlButton>
+                <ControlButton active={videoOn} onClick={toggleVideo} disabled={isScreenSharing}>{videoOn ? "📹" : "📸"}</ControlButton>
+                {!!(navigator.mediaDevices && navigator.mediaDevices.getDisplayMedia) && <ControlButton active={isScreenSharing} onClick={handleScreenShare}>🖥️</ControlButton>}
+                <ControlButton className="end" onClick={handleEndCall}>📞</ControlButton>
+            </Controls>
+        </MainContainer>
     );
 };
+
+// =============================================================================
+// NEW: Component for the Home Page (for manual joining)
+// =============================================================================
+const HomePage = () => {
+    const [roomID, setRoomID] = useState("");
+    const navigate = useNavigate();
+
+    const handleJoin = () => {
+        if (roomID) {
+            navigate(`/call/${roomID}`);
+        } else {
+            alert("Please enter a room name.");
+        }
+    };
+
+    return (
+        <MainContainer>
+            <Header>MentorFlow</Header>
+            <RoomInputContainer>
+                <RoomInput
+                    value={roomID}
+                    onChange={e => setRoomID(e.target.value)}
+                    onKeyPress={event => { if (event.key === 'Enter') handleJoin(); }}
+                    placeholder="Enter Room Name"
+                />
+                <JoinButton onClick={handleJoin}>Join Call</JoinButton>
+            </RoomInputContainer>
+        </MainContainer>
+    );
+};
+
+// =============================================================================
+// Main App Component is now just a Router
+// =============================================================================
+function App() {
+    return (
+        <AppContainer>
+            <Routes>
+                <Route path="/" element={<HomePage />} />
+                <Route path="/call/:roomID" element={<CallPage />} />
+            </Routes>
+        </AppContainer>
+    );
+}
 
 export default App;
