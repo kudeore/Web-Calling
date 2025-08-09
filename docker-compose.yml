@@ -16,7 +16,7 @@ services:
     container_name: mentorflow-app
     restart: always
     ports:
-      - "80:8080" # Map host port 80 (HTTP) to the container's port 8080
+      - "8080:8080" # Map host port 80 (HTTP) to the container's port 8080
     depends_on:
       - redis-server # Ensures Redis starts before your app does
     environment:
