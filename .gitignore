@@ -32,9 +32,6 @@ Thumbs.db
 # Optional: Tor browser and other temp files
 *.tmp
 
-# Docker (if using)
-**/docker-compose.override.yml
-**/Dockerfile
 
 # IDE/editor files
 .idea/

@@ -1,0 +1,16 @@
+# /.dockerignore
+
+# Git files
+.git
+.gitignore
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# Local dependencies (these will be installed inside the container)
+**/node_modules
+**/npm-debug.log
+
+# React build output (this will be generated inside the container)
+client/build
